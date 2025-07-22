@@ -8,6 +8,10 @@ MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"  # the URL
 class TextRequest(BaseModel):
     text: str
 
+@app.get("/")
+def root():
+    return {"message": "proxy backend is running."}
+
 @app.post("/analyze")
 def analyze_sentiment(request: TextRequest):
     try:
