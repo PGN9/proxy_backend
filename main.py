@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import requests
 
 app = FastAPI()
-BACKEND_A_URL = "https://vader-backend-po5q.onrender.com"  # the URL where vader-backend is deployed
+MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"  # the URL where vader-backend is deployed
 
 class TextRequest(BaseModel):
     text: str
@@ -11,7 +11,7 @@ class TextRequest(BaseModel):
 @app.post("/analyze")
 def analyze_sentiment(request: TextRequest):
     try:
-        response = requests.post(BACKEND_A_URL, json={"text": request.text})
+        response = requests.post(MODEL_BACKEND_URL, json={"text": request.text})
         response.raise_for_status()
         return {"source": "proxy_backend", "model_response": response.json()}
     except requests.RequestException as e:
