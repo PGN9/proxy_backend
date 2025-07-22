@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from typing import List
 import requests
 
 import time
@@ -10,8 +11,8 @@ start_time = time.time()
 app = FastAPI()
 MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"  # the URL where vader-backend is deployed
 
-class TextRequest(BaseModel):
-    text: str
+class TextListRequest(BaseModel):
+    texts: List[str]
 
 @app.get("/")
 def root():
@@ -20,7 +21,7 @@ def root():
 @app.post("/analyze")
 def analyze_sentiment(request: TextRequest):
     try:
-        response = requests.post(MODEL_BACKEND_URL, json={"text": request.text})
+        response = requests.post(MODEL_BACKEND_URL, json={"texts": request.texts})
         response.raise_for_status()
         return {"source": "proxy_backend", "model_response": response.json()}
     except requests.RequestException as e:
