@@ -1,0 +1,3 @@
+asyncpraw
+httpx
+python-dotenv
