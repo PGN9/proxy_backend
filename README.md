@@ -11,15 +11,23 @@ reddit_scraper.py
 pip install -r requirements.txt
 
 - Create tables in Supabase with this schema:
+  -- Drop in reverse order due to foreign key dependencies
+  drop table if exists comments;
+  drop table if exists posts;
+  drop table if exists authors;
+  drop table if exists subreddits;
 
+-- Subreddits
 create table subreddits (
 name text primary key
 );
 
+-- Authors
 create table authors (
 username text primary key
 );
 
+-- Posts
 create table posts (
 id text primary key,
 subreddit text references subreddits(name),
@@ -32,6 +40,7 @@ num_comments integer,
 permalink text
 );
 
+-- Comments
 create table comments (
 id text primary key,
 post_id text references posts(id),
