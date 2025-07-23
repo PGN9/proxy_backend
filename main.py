@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from typing import List
 from dotenv import load_dotenv
 import httpx
+import json
 import os
 import time
 
