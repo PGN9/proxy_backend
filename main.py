@@ -25,6 +25,9 @@ def root():
 def analyze_sentiment(request: TextListRequest):
     payload = {"texts": request.texts}
 
+    # Get the number of comments
+    num_comments = len(request.texts)
+
     # Total round trip timer start
     total_start = time.time()
 
@@ -32,8 +35,7 @@ def analyze_sentiment(request: TextListRequest):
     send_start = time.time()
 
     try:
-        response = requests.post(MODEL_BACKEND_URL,
-                                 json={"texts": request.texts})
+        response = requests.post(MODEL_BACKEND_URL, json=payload)
         response.raise_for_status()
     except requests.RequestException as e:
         raise HTTPException(status_code=502,
@@ -57,6 +59,7 @@ def analyze_sentiment(request: TextListRequest):
     return {
         "source": "proxy_backend", 
         "model_response": response.json(),
+        "number_of_comments": num_comments,
         "timing": {
             "send_time": send_time,
             "process_time": process_time,
