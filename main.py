@@ -18,6 +18,7 @@ HEADERS = {
     "apikey": SUPABASE_API_KEY,
     "Authorization": f"Bearer {SUPABASE_API_KEY}",
     "Content-Type": "application/json",
+    "Prefer": "return=minimal"
 }
 
 TEXTS_TABLE = "comments"
