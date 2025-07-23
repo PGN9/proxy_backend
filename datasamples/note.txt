@@ -1,0 +1,5 @@
+when adding to supabase add in the following order:
+1. subreddits
+2. authors
+3. posts
+4. comments
