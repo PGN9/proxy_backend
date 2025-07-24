@@ -75,7 +75,7 @@ async def scrape_comments():
     ) as reddit:
         
         print(f"Fetching top {POST_LIMIT} hot posts from r/gout...", flush=True)
-        subreddit = await reddit.subreddit("AskReddit")
+        subreddit = await reddit.subreddit("gout")
         reddit_call_count += 1
         global_api_call_count += 1
 
