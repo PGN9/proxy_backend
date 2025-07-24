@@ -13,6 +13,9 @@ MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
+if not SUPABASE_URL or not SUPABASE_API_KEY:
+    raise RuntimeError(
+        "Missing Supabase credentials in environment variables.")
 
 HEADERS = {
     "apikey": SUPABASE_API_KEY,
@@ -42,6 +45,28 @@ async def batch_upsert(table, data_list, conflict_field):
         return True
 
 
+async def fetch_all_comments():
+    all_comments = []
+    step = 1000
+    offset = 0
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            headers = {**HEADERS, "Range": f"{offset}-{offset + step - 1}"}
+            url = f"{SUPABASE_URL}/rest/v1/{TEXTS_TABLE}?select=id,body"
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            batch = response.json()
+            if not batch:
+                break
+            all_comments.extend(batch)
+            if len(batch) < step:
+                break
+            offset += step
+
+    return all_comments
+
+
 @app.get("/")
 def root():
     return {"message": "proxy backend is running."}
@@ -55,11 +80,7 @@ async def analyze_sentiment():
 
         # Step 1: fetch id and body from Supabase
         fetch_start = time.perf_counter()
-        url = f"{SUPABASE_URL}/rest/v1/{TEXTS_TABLE}?select=id,body"
-        async with httpx.AsyncClient() as client:
-            supa_resp = await client.get(url, headers=HEADERS)
-            supa_resp.raise_for_status()
-            comments_data = supa_resp.json()
+        comments_data = await fetch_all_comments()
         fetch_end = time.perf_counter()
         timings["supabase_fetch_time"] = fetch_end - fetch_start
 
