@@ -26,6 +26,7 @@ TEXTS_TABLE = "comments"
 request_count = 0
 start_time = time.time()
 
+
 # for updating the table when we get result back
 async def upsert(table, data, conflict_field):
     """Upsert a record into Supabase table"""
@@ -33,11 +34,14 @@ async def upsert(table, data, conflict_field):
         url = f"{SUPABASE_URL}/rest/v1/{table}"
         params = {"on_conflict": conflict_field}
         #Upserting data into table
-        response = await client.post(
-            url, headers=HEADERS, params=params, data=json.dumps(data)
-        )
+        response = await client.post(url,
+                                     headers=HEADERS,
+                                     params=params,
+                                     data=json.dumps(data))
         if response.status_code >= 400:
-            print(f"❌ Failed to upsert into {table}: {response.status_code} - {response.text}")
+            print(
+                f"❌ Failed to upsert into {table}: {response.status_code} - {response.text}"
+            )
 
 
 @app.get("/")
@@ -58,14 +62,18 @@ async def analyze_sentiment():
             comments_data = supa_resp.json()
             fetch_end = time.time()
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Error fetching from Supabase: {e}")
+            raise HTTPException(status_code=502,
+                                detail=f"Error fetching from Supabase: {e}")
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=supa_resp.status_code,
-                                detail=f"Supabase returned error: {supa_resp.text}")
+            raise HTTPException(
+                status_code=supa_resp.status_code,
+                detail=f"Supabase returned error: {supa_resp.text}")
 
     # Prepare payload with id and body
-    comments = [{"id": item["id"], "body": item["body"]}
-                for item in comments_data if "id" in item and "body" in item]
+    comments = [{
+        "id": item["id"],
+        "body": item["body"]
+    } for item in comments_data if "id" in item and "body" in item]
 
     if not comments:
         return {"message": "No comments found in Supabase."}
@@ -80,16 +88,18 @@ async def analyze_sentiment():
             model_resp.raise_for_status()
             send_end = time.time()
         except httpx.RequestError as e:
-            raise HTTPException(status_code=502, detail=f"Error calling model backend: {e}")
+            raise HTTPException(status_code=502,
+                                detail=f"Error calling model backend: {e}")
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=model_resp.status_code,
-                                detail=f"Model backend returned error: {model_resp.text}")
+            raise HTTPException(
+                status_code=model_resp.status_code,
+                detail=f"Model backend returned error: {model_resp.text}")
 
     model_results = model_resp.json()
 
     # update Supabase with sentiment results
     update_count = 0
-    for res in model_results:
+    for res in model_results["results"]:
         update_data = {
             "id": res["id"],
             "sentiment": res.get("sentiment"),
@@ -101,9 +111,13 @@ async def analyze_sentiment():
 
     # timing info
     timings = {
-        "supabase_fetch_time": fetch_end - fetch_start,
-        "model_send_time": send_end - send_start,
-        "model_processing_time": model_resp.elapsed.total_seconds() if hasattr(model_resp, "elapsed") else None,
+        "supabase_fetch_time":
+        fetch_end - fetch_start,
+        "model_send_time":
+        send_end - send_start,
+        "model_processing_time":
+        model_resp.elapsed.total_seconds()
+        if hasattr(model_resp, "elapsed") else None,
         "total_time": (send_end - fetch_start)
     }
 

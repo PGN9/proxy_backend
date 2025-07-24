@@ -6,3 +6,4 @@ supabase
 asyncpraw
 httpx
 python-dotenv
+psutil
