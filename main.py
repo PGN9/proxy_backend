@@ -97,16 +97,27 @@ async def analyze_sentiment():
         # Step 2: send to backend model
         send_start = time.perf_counter()
         async with httpx.AsyncClient() as client:
-            model_resp = await client.post(MODEL_BACKEND_URL,
-                                           json={"comments": comments})
+            model_resp = await client.post(
+                MODEL_BACKEND_URL,
+                json={"comments": comments},
+                timeout=600.0  # or some higher value (seconds)
+            )
             print("✅ Sent to backend, status:", model_resp.status_code)
             model_resp.raise_for_status()
         send_end = time.perf_counter()
-        timings["model_send_time"] = send_end - send_start
 
         model_results = model_resp.json()
-        timings["model_processing_time"] = model_resp.elapsed.total_seconds(
-        ) if hasattr(model_resp, "elapsed") else None
+        if hasattr(model_resp, "elapsed"):
+            model_processing_time = model_resp.elapsed.total_seconds()
+        else:
+            model_processing_time = None
+        timings["model_processing_time"] = model_processing_time
+        # Subtract processing time only if it's available
+        if model_processing_time is not None:
+            timings[
+                "model_send_time"] = send_end - send_start - model_processing_time
+        else:
+            timings["model_send_time"] = send_end - send_start
 
         # Step 3: upsert
         update_start = time.perf_counter()
