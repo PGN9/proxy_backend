@@ -120,9 +120,9 @@ async def analyze_sentiment():
     timings["total_time"] = overall_end - overall_start
 
     return {
-        "source": "proxy_backend",
+        "model_response": model_results,
+        "source": "vader_backend",
         "number_of_comments": len(comments),
         "number_updated": update_count,
-        "model_response": model_results,
         "timing": timings
     }
