@@ -135,13 +135,19 @@ async def analyze_sentiment():
         overall_end = time.perf_counter()
         timings["total_time"] = overall_end - overall_start
 
+        # Remove "results" from model response
+        model_metrics = {
+            k: v
+            for k, v in model_results.items() if k != "results"
+        }
+
         return {
-            "model_response": model_results,
-            "source": "vader_backend",
+            "model_metrics": model_metrics,
             "number_of_comments": len(comments),
             "number_updated": update_count,
             "timing": timings
         }
+
     except Exception as e:
         import traceback
         print("❌ Uncaught exception in /analyze:")
