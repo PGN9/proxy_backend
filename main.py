@@ -121,10 +121,17 @@ async def analyze_sentiment():
 
         # Step 3: upsert
         update_start = time.perf_counter()
+        fields = [
+            "sentiment", "sentiment_score", "emotions", "emotion_scores",
+            "topics", "clusters"
+        ]
+
         update_data_list = [{
             "id": res["id"],
-            "sentiment": res.get("sentiment"),
-            "sentiment_score": res.get("sentiment_score")
+            **{
+                field: res[field]
+                for field in fields if field in res
+            }
         } for res in model_results["results"]]
 
         success = await batch_upsert(TEXTS_TABLE, update_data_list, "id")
