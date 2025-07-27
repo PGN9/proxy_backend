@@ -18,8 +18,8 @@ class Config:
     TEXTS_TABLE = "comments"
 
     FETCH_STEP = 1000  # batch size when fetching from Supabase
-    PROCESS_LIMIT = 100  # max comments to process (for testing)
-    MODEL_BATCH_SIZE = 10  # batch size to send to model backend
+    PROCESS_LIMIT = 1000  # max comments to process (for testing)
+    MODEL_BATCH_SIZE = 100  # batch size to send to model backend
 
     RETRIES = 3  # number of retries for model backend calls
     RETRY_DELAY_INITIAL = 1  # initial retry delay (seconds)
@@ -78,9 +78,9 @@ async def _fetch_comments():
 
     return all_comments
 
-
 async def _process_comments_with_model(comments: List[dict]):
     all_model_results = []
+    stats_data = {}  # Store stats info
     max_retries = Config.RETRIES
     model_batch_size = Config.MODEL_BATCH_SIZE
     num_batches = (len(comments) + model_batch_size - 1) // model_batch_size
@@ -100,7 +100,6 @@ async def _process_comments_with_model(comments: List[dict]):
                                                    }) as response:
                         response.raise_for_status()
 
-                        # Temporary list to hold batch results before upsert
                         batch_results = []
 
                         async for line in response.aiter_lines():
@@ -112,15 +111,19 @@ async def _process_comments_with_model(comments: List[dict]):
                                 batch_results.append(data)
                             elif data.get("type") == "stats":
                                 print(f"Received stats: {data}")
+                                if not stats_data:
+                                    stats_data = {k: v for k, v in data.items() if k != "type"}
+                                else:
+                                    stats_data["memory_initial_mb"] = min(stats_data["memory_initial_mb"], data["memory_initial_mb"])
+                                    stats_data["memory_peak_mb"] = max(stats_data["memory_peak_mb"], data["memory_peak_mb"])
+                                    stats_data["total_data_size_kb"] += data["total_data_size_kb"]
+                                    stats_data["total_return_size_kb"] += data["total_return_size_kb"]
                             else:
                                 print(f"Unknown stream line: {data}")
 
-                        # After streaming done, upsert batch results immediately
-                        # If emotion_scores is a list of JSON strings, convert to list of dicts
                         for res in all_model_results:
                             if "emotion_scores" in res and isinstance(
                                     res["emotion_scores"], list):
-                                # Check if first element is stringified JSON, then parse all
                                 if res["emotion_scores"] and isinstance(
                                         res["emotion_scores"][0], str):
                                     res["emotion_scores"] = [
@@ -131,8 +134,7 @@ async def _process_comments_with_model(comments: List[dict]):
                         if batch_results:
                             for res in batch_results:
                                 if "type" in res:
-                                    del res[
-                                        "type"]  # Remove the field not in DB
+                                    del res["type"]
                             success = await batch_upsert(
                                 Config.TEXTS_TABLE, batch_results, "id")
                             if success:
@@ -145,7 +147,7 @@ async def _process_comments_with_model(comments: List[dict]):
                                 )
 
                         all_model_results.extend(batch_results)
-                break  # Exit retry loop if success
+                break
             except httpx.HTTPStatusError as e:
                 print(f"❌ Attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
@@ -163,7 +165,8 @@ async def _process_comments_with_model(comments: List[dict]):
                 else:
                     raise
 
-    return all_model_results, num_batches
+    return all_model_results, num_batches, stats_data
+
 
 
 async def _upsert_results(all_model_results: List[dict]):
@@ -219,8 +222,8 @@ async def analyze_sentiment():
 
         # Step 2: send to backend model with retry logic and batching
         send_start = time.perf_counter()
-        all_model_results, num_batches = await _process_comments_with_model(
-            comments)
+        all_model_results, num_batches, stats_data = await _process_comments_with_model(comments)
+
         send_end = time.perf_counter()
 
         timings["model_processing_time"] = send_end - send_start
@@ -234,7 +237,11 @@ async def analyze_sentiment():
         overall_end = time.perf_counter()
         timings["total_time"] = overall_end - overall_start
 
-        model_metrics = {"total_processed_comments": len(all_model_results)}
+        model_metrics = {
+            "total_processed_comments": len(all_model_results),
+            **stats_data  # merge in backend-provided metrics without "type"
+        }
+
 
         return {
             "model_metrics": model_metrics,
