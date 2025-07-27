@@ -21,7 +21,7 @@ class Config:
     PROCESS_LIMIT = 100  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 10  # batch size to send to model backend
 
-    RETRIES = 5  # number of retries for model backend calls
+    RETRIES = 3  # number of retries for model backend calls
     RETRY_DELAY_INITIAL = 1  # initial retry delay (seconds)
 
 
