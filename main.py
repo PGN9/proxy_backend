@@ -129,6 +129,10 @@ async def _process_comments_with_model(comments: List[dict]):
                                     ]
 
                         if batch_results:
+                            for res in batch_results:
+                                if "type" in res:
+                                    del res[
+                                        "type"]  # Remove the field not in DB
                             success = await batch_upsert(
                                 Config.TEXTS_TABLE, batch_results, "id")
                             if success:
@@ -219,8 +223,7 @@ async def analyze_sentiment():
             comments)
         send_end = time.perf_counter()
 
-        timings["model_processing_time"] = None
-        timings["model_send_time"] = send_end - send_start
+        timings["model_processing_time"] = send_end - send_start
 
         # Step 3: upsert
         update_start = time.perf_counter()
