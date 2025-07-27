@@ -90,34 +90,63 @@ async def _process_comments_with_model(comments: List[dict]):
         print(
             f"Processing batch {i // model_batch_size + 1}/{num_batches} with {len(batch_comments)} comments."
         )
+
         for attempt in range(max_retries):
             try:
-                async with httpx.AsyncClient() as client:
-                    model_resp = await client.post(
-                        Config.MODEL_BACKEND_URL,
-                        json={"comments": batch_comments},
-                        timeout=600.0  # or some higher value (seconds)
-                    )
-                    model_resp.raise_for_status()
-                print("✅ Sent to backend, status:", model_resp.status_code)
-                all_model_results.extend(model_resp.json()["results"])
-                break  # Exit loop if successful
+                async with httpx.AsyncClient(timeout=600.0) as client:
+                    async with client.stream("POST",
+                                             Config.MODEL_BACKEND_URL,
+                                             json={"comments": batch_comments
+                                                   }) as response:
+                        response.raise_for_status()
+
+                        # Temporary list to hold batch results before upsert
+                        batch_results = []
+
+                        async for line in response.aiter_lines():
+                            if not line.strip():
+                                continue
+                            data = json.loads(line)
+
+                            if data.get("type") == "result":
+                                batch_results.append(data)
+                            elif data.get("type") == "stats":
+                                print(f"Received stats: {data}")
+                            else:
+                                print(f"Unknown stream line: {data}")
+
+                        # After streaming done, upsert batch results immediately
+                        if batch_results:
+                            success = await batch_upsert(
+                                Config.TEXTS_TABLE, batch_results, "id")
+                            if success:
+                                print(
+                                    f"✅ Upserted {len(batch_results)} results for batch {i // model_batch_size + 1}"
+                                )
+                            else:
+                                print(
+                                    f"❌ Failed upsert for batch {i // model_batch_size + 1}"
+                                )
+
+                        all_model_results.extend(batch_results)
+                break  # Exit retry loop if success
             except httpx.HTTPStatusError as e:
                 print(f"❌ Attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
-                                        (2**attempt))  # Exponential backoff
+                                        (2**attempt))
                 else:
-                    raise  # Re-raise if all retries fail
+                    raise
             except httpx.RequestError as e:
                 print(
                     f"❌ Attempt {attempt + 1} failed due to network error: {e}"
                 )
                 if attempt < max_retries - 1:
                     await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
-                                        (2**attempt))  # Exponential backoff
+                                        (2**attempt))
                 else:
-                    raise  # Re-raise if all retries fail
+                    raise
+
     return all_model_results, num_batches
 
 
