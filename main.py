@@ -21,7 +21,7 @@ class Config:
     PROCESS_LIMIT = 100  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 10  # batch size to send to model backend
 
-    RETRIES = 3  # number of retries for model backend calls
+    RETRIES = 5  # number of retries for model backend calls
     RETRY_DELAY_INITIAL = 1  # initial retry delay (seconds)
 
 
@@ -116,6 +116,18 @@ async def _process_comments_with_model(comments: List[dict]):
                                 print(f"Unknown stream line: {data}")
 
                         # After streaming done, upsert batch results immediately
+                        # If emotion_scores is a list of JSON strings, convert to list of dicts
+                        for res in all_model_results:
+                            if "emotion_scores" in res and isinstance(
+                                    res["emotion_scores"], list):
+                                # Check if first element is stringified JSON, then parse all
+                                if res["emotion_scores"] and isinstance(
+                                        res["emotion_scores"][0], str):
+                                    res["emotion_scores"] = [
+                                        json.loads(s)
+                                        for s in res["emotion_scores"]
+                                    ]
+
                         if batch_results:
                             success = await batch_upsert(
                                 Config.TEXTS_TABLE, batch_results, "id")
