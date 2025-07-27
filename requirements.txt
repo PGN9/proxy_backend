@@ -1,9 +1,1 @@
-fastapi
-pydantic
-requests
-uvicorn
-supabase
-asyncpraw
-httpx
-python-dotenv
-psutil
+requests==2.31.0
