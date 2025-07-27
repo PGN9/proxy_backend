@@ -9,8 +9,6 @@ import asyncio
 
 load_dotenv()
 
-app = FastAPI()
-
 
 # === Configuration constants ===
 class Config:
@@ -20,12 +18,14 @@ class Config:
     TEXTS_TABLE = "comments"
 
     FETCH_STEP = 1000  # batch size when fetching from Supabase
-    PROCESS_LIMIT = 10  # max comments to process (for testing)
+    PROCESS_LIMIT = 100  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 10  # batch size to send to model backend
 
     RETRIES = 3  # number of retries for model backend calls
     RETRY_DELAY_INITIAL = 1  # initial retry delay (seconds)
 
+
+app = FastAPI()
 
 if not Config.SUPABASE_URL or not Config.SUPABASE_API_KEY:
     raise RuntimeError(
@@ -39,15 +39,16 @@ HEADERS = {
 }
 
 
-# === Helper functions ===
 async def batch_upsert(table, data_list, conflict_field):
     async with httpx.AsyncClient() as client:
         url = f"{Config.SUPABASE_URL}/rest/v1/{table}"
         params = {"on_conflict": conflict_field}
-        response = await client.post(url,
-                                     headers=HEADERS,
-                                     params=params,
-                                     json=data_list)
+        response = await client.post(
+            url,
+            headers=HEADERS,
+            params=params,
+            json=data_list  # let httpx handle the encoding
+        )
         if response.status_code >= 400:
             print(
                 f"❌ Failed batch upsert into {table}: {response.status_code} - {response.text}"
@@ -78,9 +79,6 @@ async def fetch_all_comments():
     return all_comments
 
 
-# === Routes ===
-
-
 @app.get("/")
 def root():
     return {"message": "proxy backend is running."}
@@ -92,120 +90,114 @@ async def analyze_sentiment():
         timings = {}
         overall_start = time.perf_counter()
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            # Fetch comments from Supabase
-            fetch_start = time.perf_counter()
-            comments_data = await fetch_all_comments()
-            fetch_end = time.perf_counter()
-            timings["supabase_fetch_time"] = fetch_end - fetch_start
+        # Step 1: fetch id and body from Supabase
+        fetch_start = time.perf_counter()
+        comments_data = await fetch_all_comments()
+        fetch_end = time.perf_counter()
+        timings["supabase_fetch_time"] = fetch_end - fetch_start
 
-            comments = [{
-                "id": item["id"],
-                "body": item["body"]
-            } for item in comments_data if "id" in item and "body" in item
-                        ][:Config.PROCESS_LIMIT]
+        # Prepare payload
+        comments = [{
+            "id": item["id"],
+            "body": item["body"]
+        } for item in comments_data if "id" in item and "body" in item]
 
-            print(f"🧪 Number of comments to process: {len(comments)}")
-            if not comments:
-                return {"message": "No comments found in Supabase."}
+        print(f"🧪 Number of comments to process: {len(comments)}")
+        if not comments:
+            return {"message": "No comments found in Supabase."}
 
-            # Send comments to model backend in batches with retry
-            batch_size = Config.MODEL_BATCH_SIZE
-            all_model_results = []
-            send_start = time.perf_counter()
+        # Apply PROCESS_LIMIT for testing
+        if Config.PROCESS_LIMIT and len(comments) > Config.PROCESS_LIMIT:
+            comments = comments[:Config.PROCESS_LIMIT]
+            print(f"Limiting processing to {Config.PROCESS_LIMIT} comments.")
 
-            for i in range(0, len(comments), batch_size):
-                batch_comments = comments[i:i + batch_size]
-                retries = Config.RETRIES
-                delay = Config.RETRY_DELAY_INITIAL
-                for attempt in range(retries):
-                    try:
+        # Step 2: send to backend model with retry logic and batching
+        all_model_results = []
+        send_start = time.perf_counter()
+        max_retries = Config.RETRIES
+        model_batch_size = Config.MODEL_BATCH_SIZE
+        num_batches = (len(comments) + model_batch_size -
+                       1) // model_batch_size
+
+        for i in range(0, len(comments), model_batch_size):
+            batch_comments = comments[i:i + model_batch_size]
+            print(
+                f"Processing batch {i // model_batch_size + 1}/{num_batches} with {len(batch_comments)} comments."
+            )
+            for attempt in range(max_retries):
+                try:
+                    async with httpx.AsyncClient() as client:
                         model_resp = await client.post(
                             Config.MODEL_BACKEND_URL,
-                            json={"comments": batch_comments})
-                        print("✅ Sent batch to backend, status:",
-                              model_resp.status_code)
-                        model_resp.raise_for_status()
-                        results = model_resp.json().get("results", [])
-                        all_model_results.extend(results)
-                        break
-                    except httpx.HTTPStatusError as exc:
-                        if exc.response.status_code in {502, 503}:
-                            print(
-                                f"⚠️ Attempt {attempt + 1}/{retries}: "
-                                f"{exc.response.status_code} error. Retrying in {delay}s..."
-                            )
-                            await asyncio.sleep(delay)
-                            delay *= 2
-                        else:
-                            raise HTTPException(
-                                status_code=exc.response.status_code,
-                                detail=f"Backend error: {exc}",
-                            )
-                    except httpx.RequestError as exc:
-                        print(
-                            f"⚠️ Attempt {attempt + 1}/{retries}: Network error: {exc}. Retrying in {delay}s..."
+                            json={"comments": batch_comments},
+                            timeout=600.0  # or some higher value (seconds)
                         )
-                        await asyncio.sleep(delay)
-                        delay *= 2
-                else:
-                    raise HTTPException(
-                        status_code=504,
-                        detail=
-                        "Failed to process batch after multiple retries.",
+                        model_resp.raise_for_status()
+                    print("✅ Sent to backend, status:", model_resp.status_code)
+                    all_model_results.extend(model_resp.json()["results"])
+                    break  # Exit loop if successful
+                except httpx.HTTPStatusError as e:
+                    print(f"❌ Attempt {attempt + 1} failed: {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
+                                            (2**attempt)
+                                            )  # Exponential backoff
+                    else:
+                        raise  # Re-raise if all retries fail
+                except httpx.RequestError as e:
+                    print(
+                        f"❌ Attempt {attempt + 1} failed due to network error: {e}"
                     )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
+                                            (2**attempt)
+                                            )  # Exponential backoff
+                    else:
+                        raise  # Re-raise if all retries fail
+        send_end = time.perf_counter()
 
-            send_end = time.perf_counter()
-            timings["model_send_time"] = send_end - send_start
+        timings["model_processing_time"] = None
+        timings["model_send_time"] = send_end - send_start
 
-            # Upsert results back to Supabase
-            update_start = time.perf_counter()
-            fields = [
-                "sentiment",
-                "sentiment_score",
-                "emotions",
-                "emotion_scores",
-                "topics",
-                "clusters",
-            ]
+        # Step 3: upsert
+        update_start = time.perf_counter()
+        fields = [
+            "sentiment", "sentiment_score", "emotions", "emotion_scores",
+            "topics", "clusters"
+        ]
 
-            update_data_list = [{
-                "id": res["id"],
-                **{
-                    field: res[field]
-                    for field in fields if field in res
-                },
-            } for res in all_model_results]
-
-            success = await batch_upsert(Config.TEXTS_TABLE, update_data_list,
-                                         "id")
-            update_count = len(update_data_list) if success else 0
-            update_end = time.perf_counter()
-            timings["supabase_update_time"] = update_end - update_start
-
-            overall_end = time.perf_counter()
-            timings["total_time"] = overall_end - overall_start
-
-            # Rename and round timing values for final response
-            timings["model_processing_time"] = timings.pop("model_send_time")
-            timings = {k: round(v, 4) for k, v in timings.items()}
-
-            model_metrics = {"model_used": "vader"}
-
-            return {
-                "model_metrics": model_metrics,
-                "number_of_comments": len(comments),
-                "number_updated": update_count,
-                "timing": timings,
+        update_data_list = [{
+            "id": res["id"],
+            **{
+                field: res[field]
+                for field in fields if field in res
             }
+        } for res in all_model_results]
 
-    except HTTPException as http_exc:
-        raise http_exc
+        success = await batch_upsert(Config.TEXTS_TABLE, update_data_list,
+                                     "id")
+        update_count = len(update_data_list) if success else 0
+        update_end = time.perf_counter()
+        timings["supabase_update_time"] = update_end - update_start
+
+        overall_end = time.perf_counter()
+        timings["total_time"] = overall_end - overall_start
+
+        model_metrics = {"total_processed_comments": len(all_model_results)}
+
+        return {
+            "model_metrics": model_metrics,
+            "number_of_comments": len(comments),
+            "number_updated": update_count,
+            "timing": timings,
+            "batch_info": {
+                "batch_size": model_batch_size,
+                "number_of_batches": num_batches
+            }
+        }
 
     except Exception as e:
         import traceback
-
         print("❌ Uncaught exception in /analyze:")
         traceback.print_exc()
-        raise HTTPException(status_code=500,
-                            detail="Internal Server Error: " + str(e))
+        raise HTTPException(status_code=500, detail=str(e))
