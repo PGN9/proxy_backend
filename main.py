@@ -12,7 +12,7 @@ load_dotenv()
 
 # === Configuration constants ===
 class Config:
-    MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"
+    MODEL_BACKEND_URL = "http://localhost:8001/predict"
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
     TEXTS_TABLE = "comments"
