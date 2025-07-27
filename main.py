@@ -57,7 +57,7 @@ async def batch_upsert(table, data_list, conflict_field):
         return True
 
 
-async def fetch_all_comments():
+async def _fetch_comments():
     all_comments = []
     step = Config.FETCH_STEP
     offset = 0
@@ -79,6 +79,67 @@ async def fetch_all_comments():
     return all_comments
 
 
+async def _process_comments_with_model(comments: List[dict]):
+    all_model_results = []
+    max_retries = Config.RETRIES
+    model_batch_size = Config.MODEL_BATCH_SIZE
+    num_batches = (len(comments) + model_batch_size - 1) // model_batch_size
+
+    for i in range(0, len(comments), model_batch_size):
+        batch_comments = comments[i:i + model_batch_size]
+        print(
+            f"Processing batch {i // model_batch_size + 1}/{num_batches} with {len(batch_comments)} comments."
+        )
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient() as client:
+                    model_resp = await client.post(
+                        Config.MODEL_BACKEND_URL,
+                        json={"comments": batch_comments},
+                        timeout=600.0  # or some higher value (seconds)
+                    )
+                    model_resp.raise_for_status()
+                print("✅ Sent to backend, status:", model_resp.status_code)
+                all_model_results.extend(model_resp.json()["results"])
+                break  # Exit loop if successful
+            except httpx.HTTPStatusError as e:
+                print(f"❌ Attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
+                                        (2**attempt))  # Exponential backoff
+                else:
+                    raise  # Re-raise if all retries fail
+            except httpx.RequestError as e:
+                print(
+                    f"❌ Attempt {attempt + 1} failed due to network error: {e}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
+                                        (2**attempt))  # Exponential backoff
+                else:
+                    raise  # Re-raise if all retries fail
+    return all_model_results, num_batches
+
+
+async def _upsert_results(all_model_results: List[dict]):
+    fields = [
+        "sentiment", "sentiment_score", "emotions", "emotion_scores", "topics",
+        "clusters"
+    ]
+
+    update_data_list = [{
+        "id": res["id"],
+        **{
+            field: res[field]
+            for field in fields if field in res
+        }
+    } for res in all_model_results]
+
+    success = await batch_upsert(Config.TEXTS_TABLE, update_data_list, "id")
+    update_count = len(update_data_list) if success else 0
+    return update_count
+
+
 @app.get("/")
 def root():
     return {"message": "proxy backend is running."}
@@ -92,7 +153,7 @@ async def analyze_sentiment():
 
         # Step 1: fetch id and body from Supabase
         fetch_start = time.perf_counter()
-        comments_data = await fetch_all_comments()
+        comments_data = await _fetch_comments()
         fetch_end = time.perf_counter()
         timings["supabase_fetch_time"] = fetch_end - fetch_start
 
@@ -112,48 +173,9 @@ async def analyze_sentiment():
             print(f"Limiting processing to {Config.PROCESS_LIMIT} comments.")
 
         # Step 2: send to backend model with retry logic and batching
-        all_model_results = []
         send_start = time.perf_counter()
-        max_retries = Config.RETRIES
-        model_batch_size = Config.MODEL_BATCH_SIZE
-        num_batches = (len(comments) + model_batch_size -
-                       1) // model_batch_size
-
-        for i in range(0, len(comments), model_batch_size):
-            batch_comments = comments[i:i + model_batch_size]
-            print(
-                f"Processing batch {i // model_batch_size + 1}/{num_batches} with {len(batch_comments)} comments."
-            )
-            for attempt in range(max_retries):
-                try:
-                    async with httpx.AsyncClient() as client:
-                        model_resp = await client.post(
-                            Config.MODEL_BACKEND_URL,
-                            json={"comments": batch_comments},
-                            timeout=600.0  # or some higher value (seconds)
-                        )
-                        model_resp.raise_for_status()
-                    print("✅ Sent to backend, status:", model_resp.status_code)
-                    all_model_results.extend(model_resp.json()["results"])
-                    break  # Exit loop if successful
-                except httpx.HTTPStatusError as e:
-                    print(f"❌ Attempt {attempt + 1} failed: {e}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
-                                            (2**attempt)
-                                            )  # Exponential backoff
-                    else:
-                        raise  # Re-raise if all retries fail
-                except httpx.RequestError as e:
-                    print(
-                        f"❌ Attempt {attempt + 1} failed due to network error: {e}"
-                    )
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(Config.RETRY_DELAY_INITIAL *
-                                            (2**attempt)
-                                            )  # Exponential backoff
-                    else:
-                        raise  # Re-raise if all retries fail
+        all_model_results, num_batches = await _process_comments_with_model(
+            comments)
         send_end = time.perf_counter()
 
         timings["model_processing_time"] = None
@@ -161,22 +183,7 @@ async def analyze_sentiment():
 
         # Step 3: upsert
         update_start = time.perf_counter()
-        fields = [
-            "sentiment", "sentiment_score", "emotions", "emotion_scores",
-            "topics", "clusters"
-        ]
-
-        update_data_list = [{
-            "id": res["id"],
-            **{
-                field: res[field]
-                for field in fields if field in res
-            }
-        } for res in all_model_results]
-
-        success = await batch_upsert(Config.TEXTS_TABLE, update_data_list,
-                                     "id")
-        update_count = len(update_data_list) if success else 0
+        update_count = await _upsert_results(all_model_results)
         update_end = time.perf_counter()
         timings["supabase_update_time"] = update_end - update_start
 
@@ -191,7 +198,7 @@ async def analyze_sentiment():
             "number_updated": update_count,
             "timing": timings,
             "batch_info": {
-                "batch_size": model_batch_size,
+                "batch_size": Config.MODEL_BATCH_SIZE,
                 "number_of_batches": num_batches
             }
         }
