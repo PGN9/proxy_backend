@@ -9,7 +9,7 @@ import time
 load_dotenv()
 
 app = FastAPI()
-MODEL_BACKEND_URL = "https://vader-backend-po5q.onrender.com/predict"
+MODEL_BACKEND_URL = "http://localhost:8001/predict"
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
@@ -78,75 +78,80 @@ async def analyze_sentiment():
         timings = {}
         overall_start = time.perf_counter()
 
-        # Step 1: fetch id and body from Supabase
-        fetch_start = time.perf_counter()
-        comments_data = await fetch_all_comments()
-        fetch_end = time.perf_counter()
-        timings["supabase_fetch_time"] = fetch_end - fetch_start
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            # Step 1: fetch id and body from Supabase
+            fetch_start = time.perf_counter()
+            comments_data = await fetch_all_comments()
+            fetch_end = time.perf_counter()
+            timings["supabase_fetch_time"] = fetch_end - fetch_start
 
-        # Prepare payload
-        comments = [{
-            "id": item["id"],
-            "body": item["body"]
-        } for item in comments_data if "id" in item and "body" in item]
+            # Prepare payload
+            comments = [{
+                "id": item["id"],
+                "body": item["body"]
+            } for item in comments_data
+                        if "id" in item and "body" in item][:250]
 
-        print(f"🧪 Number of comments to process: {len(comments)}")
-        if not comments:
-            return {"message": "No comments found in Supabase."}
+            print(f"🧪 Number of comments to process: {len(comments)}")
+            if not comments:
+                return {"message": "No comments found in Supabase."}
 
-        # Step 2: send to backend model
-        send_start = time.perf_counter()
-        async with httpx.AsyncClient() as client:
-            model_resp = await client.post(
-                MODEL_BACKEND_URL,
-                json={"comments": comments},
-                timeout=600.0  # or some higher value (seconds)
-            )
+            # Step 2: send to backend model
+            send_start = time.perf_counter()
+            model_resp = await client.post(MODEL_BACKEND_URL,
+                                           json={"comments": comments})
             print("✅ Sent to backend, status:", model_resp.status_code)
             model_resp.raise_for_status()
-        send_end = time.perf_counter()
+            send_end = time.perf_counter()
 
-        model_results = model_resp.json()
-        if hasattr(model_resp, "elapsed"):
-            model_processing_time = model_resp.elapsed.total_seconds()
-        else:
-            model_processing_time = None
-        timings["model_processing_time"] = model_processing_time
-        # Subtract processing time only if it's available
-        if model_processing_time is not None:
-            timings[
-                "model_send_time"] = send_end - send_start - model_processing_time
-        else:
-            timings["model_send_time"] = send_end - send_start
+            model_results = model_resp.json()
+            if hasattr(model_resp, "elapsed"):
+                model_processing_time = model_resp.elapsed.total_seconds()
+            else:
+                model_processing_time = None
+            timings["model_processing_time"] = model_processing_time
+            # Subtract processing time only if it's available
+            if model_processing_time is not None:
+                timings[
+                    "model_send_time"] = send_end - send_start - model_processing_time
+            else:
+                timings["model_send_time"] = send_end - send_start
 
-        # Step 3: upsert
-        update_start = time.perf_counter()
-        update_data_list = [{
-            "id": res["id"],
-            "sentiment": res.get("sentiment"),
-            "sentiment_score": res.get("sentiment_score")
-        } for res in model_results["results"]]
+            # Step 3: upsert
+            update_start = time.perf_counter()
+            fields = [
+                "sentiment", "sentiment_score", "emotions", "emotion_scores",
+                "topics", "clusters"
+            ]
 
-        success = await batch_upsert(TEXTS_TABLE, update_data_list, "id")
-        update_count = len(update_data_list) if success else 0
-        update_end = time.perf_counter()
-        timings["supabase_update_time"] = update_end - update_start
+            update_data_list = [{
+                "id": res["id"],
+                **{
+                    field: res[field]
+                    for field in fields if field in res
+                }
+            } for res in model_results["results"]]
 
-        overall_end = time.perf_counter()
-        timings["total_time"] = overall_end - overall_start
+            success = await batch_upsert(TEXTS_TABLE, update_data_list, "id")
+            update_count = len(update_data_list) if success else 0
+            update_end = time.perf_counter()
+            timings["supabase_update_time"] = update_end - update_start
 
-        # Remove "results" from model response
-        model_metrics = {
-            k: v
-            for k, v in model_results.items() if k != "results"
-        }
+            overall_end = time.perf_counter()
+            timings["total_time"] = overall_end - overall_start
 
-        return {
-            "model_metrics": model_metrics,
-            "number_of_comments": len(comments),
-            "number_updated": update_count,
-            "timing": timings
-        }
+            # Remove "results" from model response
+            model_metrics = {
+                k: v
+                for k, v in model_results.items() if k != "results"
+            }
+
+            return {
+                "model_metrics": model_metrics,
+                "number_of_comments": len(comments),
+                "number_updated": update_count,
+                "timing": timings
+            }
 
     except Exception as e:
         import traceback
