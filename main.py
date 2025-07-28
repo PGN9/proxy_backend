@@ -18,7 +18,7 @@ class Config:
     TEXTS_TABLE = "comments"
 
     FETCH_STEP = 1000  # batch size when fetching from Supabase
-    PROCESS_LIMIT = 1000  # max comments to process (for testing)
+    PROCESS_LIMIT = 10000  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 100  # batch size to send to model backend
 
     RETRIES = 3  # number of retries for model backend calls
@@ -134,6 +134,7 @@ async def _process_comments_with_model(comments: List[dict]):
                                             res["emotion_scores"] = [json.loads(s) for s in res["emotion_scores"]]
                                         except json.JSONDecodeError:
                                             print("⚠️ Failed to parse emotion_scores:", res["emotion_scores"])
+                            
                             success = await batch_upsert(
                                 Config.TEXTS_TABLE, batch_results, "id")
                             if success:
