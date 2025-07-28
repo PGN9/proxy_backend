@@ -18,7 +18,7 @@ class Config:
     TEXTS_TABLE = "comments"
 
     FETCH_STEP = 1000  # batch size when fetching from Supabase
-    PROCESS_LIMIT = 1000  # max comments to process (for testing)
+    PROCESS_LIMIT = 10000  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 100  # batch size to send to model backend
 
     RETRIES = 3  # number of retries for model backend calls
@@ -118,6 +118,8 @@ async def _process_comments_with_model(comments: List[dict]):
                                     stats_data["memory_peak_mb"] = max(stats_data["memory_peak_mb"], data["memory_peak_mb"])
                                     stats_data["total_data_size_kb"] += data["total_data_size_kb"]
                                     stats_data["total_return_size_kb"] += data["total_return_size_kb"]
+                                    stats_data["total_data_size_kb"] = round(stats_data["total_data_size_kb"], 2)
+                                    stats_data["total_return_size_kb"] = round(stats_data["total_return_size_kb"], 2)
                             else:
                                 print(f"Unknown stream line: {data}")
 
