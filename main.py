@@ -18,7 +18,7 @@ class Config:
     TEXTS_TABLE = "comments"
 
     FETCH_STEP = 1000  # batch size when fetching from Supabase
-    PROCESS_LIMIT = 10000  # max comments to process (for testing)
+    PROCESS_LIMIT = 100  # max comments to process (for testing)
     MODEL_BATCH_SIZE = 100  # batch size to send to model backend
 
     RETRIES = 3  # number of retries for model backend calls
