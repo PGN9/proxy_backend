@@ -6,9 +6,10 @@ import json
 import os
 import time
 import asyncio
+import psutil
+import logging
 
 load_dotenv()
-
 
 # === Configuration constants ===
 class Config:
@@ -24,7 +25,6 @@ class Config:
     RETRIES = 3  # number of retries for model backend calls
     RETRY_DELAY_INITIAL = 1  # initial retry delay (seconds)
 
-
 app = FastAPI()
 
 if not Config.SUPABASE_URL or not Config.SUPABASE_API_KEY:
@@ -37,6 +37,35 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "resolution=merge-duplicates,return=minimal"
 }
+
+# === Setup Logging ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("proxy-logging")
+
+# === Memory monitor globals ===
+total_memory_time = 0.0
+_sample_interval = 0.0001  # seconds
+_log_interval = 10  # seconds
+_process = psutil.Process()
+
+async def log_and_sample_memory_usage():
+    global total_memory_time
+    elapsed = 0
+
+    while True:
+        mem_mb = _process.memory_info().rss / (1024 * 1024)
+        total_memory_time += mem_mb * _sample_interval
+        elapsed += _sample_interval
+
+        if elapsed >= _log_interval:
+            logging.info(
+                f"[MEMORY MONITOR] Current memory: {mem_mb:.2f} MB | "
+                f"Total memory-time: {total_memory_time:.2f} MB·s"
+            )
+            elapsed = 0
+
+        await asyncio.sleep(_sample_interval)
+
 
 
 async def batch_upsert(table, data_list, conflict_field):
@@ -78,6 +107,7 @@ async def _fetch_comments():
 
     return all_comments
 
+
 async def _process_comments_with_model(comments: List[dict]):
     all_model_results = []
     stats_data = {}  # Store stats info
@@ -116,10 +146,9 @@ async def _process_comments_with_model(comments: List[dict]):
                                 else:
                                     stats_data["memory_initial_mb"] = min(stats_data["memory_initial_mb"], data["memory_initial_mb"])
                                     stats_data["memory_peak_mb"] = max(stats_data["memory_peak_mb"], data["memory_peak_mb"])
+                                    stats_data["modelside_total_memory_mbs"] += data["modelside_total_memory_mbs"]
                                     stats_data["total_data_size_kb"] += data["total_data_size_kb"]
                                     stats_data["total_return_size_kb"] += data["total_return_size_kb"]
-                                    stats_data["total_data_size_kb"] = round(stats_data["total_data_size_kb"], 2)
-                                    stats_data["total_return_size_kb"] = round(stats_data["total_return_size_kb"], 2)
                             else:
                                 print(f"Unknown stream line: {data}")
 
@@ -168,7 +197,6 @@ async def _process_comments_with_model(comments: List[dict]):
     return all_model_results, num_batches, stats_data
 
 
-
 async def _upsert_results(all_model_results: List[dict]):
     fields = [
         "sentiment", "sentiment_score", "emotions", "emotion_scores", "topics",
@@ -192,10 +220,15 @@ async def _upsert_results(all_model_results: List[dict]):
 def root():
     return {"message": "proxy backend is running."}
 
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(log_and_sample_memory_usage())
 
 @app.get("/analyze")
 async def analyze_sentiment():
+    global total_memory_time
     try:
+        total_memory_time = 0
         timings = {}
         overall_start = time.perf_counter()
 
@@ -245,6 +278,7 @@ async def analyze_sentiment():
 
         return {
             "model_metrics": model_metrics,
+            "proxyside_total_memory_mbs": total_memory_time,
             "number_of_comments": len(comments),
             "number_updated": update_count,
             "timing": timings,

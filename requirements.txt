@@ -1,9 +1,4 @@
 fastapi
-pydantic
-requests
-uvicorn
-supabase
-asyncpraw
 httpx
 python-dotenv
 psutil
