@@ -38,13 +38,36 @@ HEADERS = {
     "Prefer": "resolution=merge-duplicates,return=minimal"
 }
 
+ALLOWED_COLUMNS = {
+    "comments": {
+        "id",
+        "post_id",
+        "subreddit",
+        "author",
+        "body",
+        "created_utc",
+        "score",
+        "parent_id",
+        "permalink",
+        "sentiment",
+        "sentiment_score",
+        "emotions",
+        "emotion_scores",
+        "topics",
+        "topic_scores",
+        "is_deleted",
+        "readability",
+        "hashtag_count"
+    }
+}
+
 # === Setup Logging ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("proxy-logging")
 
 # === Memory monitor globals ===
 total_memory_time = 0.0
-_sample_interval = 0.0001  # seconds
+_sample_interval = 0.1  # seconds
 _log_interval = 10  # seconds
 _process = psutil.Process()
 
@@ -67,8 +90,17 @@ async def log_and_sample_memory_usage():
         await asyncio.sleep(_sample_interval)
 
 
-
 async def batch_upsert(table, data_list, conflict_field):
+    allowed_columns = ALLOWED_COLUMNS.get(table)
+    if not allowed_columns:
+        print(f"⚠️ No allowed columns defined for table: {table}")
+        return False
+
+    cleaned_data = [
+        {k: v for k, v in row.items() if k in allowed_columns}
+        for row in data_list
+    ]
+
     async with httpx.AsyncClient() as client:
         url = f"{Config.SUPABASE_URL}/rest/v1/{table}"
         params = {"on_conflict": conflict_field}
@@ -76,14 +108,14 @@ async def batch_upsert(table, data_list, conflict_field):
             url,
             headers=HEADERS,
             params=params,
-            json=data_list  # let httpx handle the encoding
+            json=cleaned_data
         )
         if response.status_code >= 400:
-            print(
-                f"❌ Failed batch upsert into {table}: {response.status_code} - {response.text}"
-            )
+            print(f"❌ Failed batch upsert into {table}: {response.status_code} - {response.text}")
             return False
-        return True
+
+    return True
+
 
 
 async def _fetch_comments():
