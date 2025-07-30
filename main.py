@@ -66,18 +66,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("proxy-logging")
 
 # === Memory monitor globals ===
-total_memory_time = 0.0
-_sample_interval = 0.1  # seconds
+memory_samples = []
+_sample_interval = 0.0001  # seconds
 _log_interval = 10  # seconds
 _process = psutil.Process()
 
 async def log_and_sample_memory_usage():
-    global total_memory_time
+    global memory_samples
     elapsed = 0
 
     while True:
         mem_mb = _process.memory_info().rss / (1024 * 1024)
-        total_memory_time += mem_mb * _sample_interval
+        memory_samples.append(mem_mb)
         elapsed += _sample_interval
 
         if elapsed >= _log_interval:
@@ -258,9 +258,9 @@ async def startup_event():
 
 @app.get("/analyze")
 async def analyze_sentiment():
-    global total_memory_time
+    global memory_samples
     try:
-        total_memory_time = 0
+        memory_samples = []
         timings = {}
         overall_start = time.perf_counter()
 
@@ -307,10 +307,12 @@ async def analyze_sentiment():
             **stats_data  # merge in backend-provided metrics without "type"
         }
 
+        avg_memory = sum(memory_samples) / len(memory_samples)
+        gb_seconds = (avg_memory / 1024) * timings["total_time"]
 
         return {
             "model_metrics": model_metrics,
-            "proxyside_total_memory_mbs": total_memory_time,
+            "proxyside_total_memory_gbs": gb_seconds,
             "number_of_comments": len(comments),
             "number_updated": update_count,
             "timing": timings,
