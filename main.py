@@ -81,10 +81,7 @@ async def log_and_sample_memory_usage():
         elapsed += _sample_interval
 
         if elapsed >= _log_interval:
-            logging.info(
-                f"[MEMORY MONITOR] Current memory: {mem_mb:.2f} MB | "
-                f"Total memory-time: {total_memory_time:.2f} MB·s"
-            )
+            logging.info(f"[MEMORY MONITOR] Current memory: {mem_mb:.2f} MB")
             elapsed = 0
 
         await asyncio.sleep(_sample_interval)
@@ -178,7 +175,7 @@ async def _process_comments_with_model(comments: List[dict]):
                                 else:
                                     stats_data["memory_initial_mb"] = min(stats_data["memory_initial_mb"], data["memory_initial_mb"])
                                     stats_data["memory_peak_mb"] = max(stats_data["memory_peak_mb"], data["memory_peak_mb"])
-                                    stats_data["modelside_total_memory_mbs"] += data["modelside_total_memory_mbs"]
+                                    stats_data["modelside_total_memory_gbs"] += data["modelside_total_memory_gbs"]
                                     stats_data["total_data_size_kb"] += data["total_data_size_kb"]
                                     stats_data["total_return_size_kb"] += data["total_return_size_kb"]
                             else:
@@ -260,7 +257,7 @@ async def startup_event():
 async def analyze_sentiment():
     global memory_samples
     try:
-        memory_samples = []
+        memory_samples.clear()
         timings = {}
         overall_start = time.perf_counter()
 
